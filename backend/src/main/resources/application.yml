@@ -1,0 +1,40 @@
+﻿spring:
+  application:
+    name: bna-digital-banking-backend
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/bna_digital_banking?createDatabaseIfNotExist=true&serverTimezone=UTC}
+    username: ${DB_USERNAME:bna_app}
+    password: ${DB_PASSWORD:bna_app_password}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+app:
+  security:
+    jwt:
+      secret: ${JWT_SECRET}
+      expiration: PT15M
+  credit-scoring:
+    available-income-full-score-ratio: ${SCORING_AVAILABLE_INCOME_FULL_SCORE_RATIO:0.30}
+    income-stability-full-score-months: ${SCORING_INCOME_STABILITY_FULL_SCORE_MONTHS:24}
+    late-payment-penalty-points: ${SCORING_LATE_PAYMENT_PENALTY_POINTS:3}
+    savings-full-score-months: ${SCORING_SAVINGS_FULL_SCORE_MONTHS:12}
+  accounts:
+    initial-balances:
+      current: ${DEMO_CURRENT_ACCOUNT_BALANCE:2000}
+      savings: ${DEMO_SAVINGS_ACCOUNT_BALANCE:5000}
+  credit-ai:
+    enabled: ${LLM_ENABLED:false}
+    base-url: ${LLM_BASE_URL:https://api.openai.com/v1}
+    api-key: ${LLM_API_KEY:}
+    model: ${LLM_MODEL:}
+    connect-timeout: ${LLM_CONNECT_TIMEOUT:3s}
+    read-timeout: ${LLM_READ_TIMEOUT:12s}
+
+server:
+  port: ${SERVER_PORT:8080}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
