@@ -1,0 +1,61 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "BNA: Backend Spring Boot",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "dev:backend"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "bna-backend",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".+",
+          "endsPattern": "Started .*Application"
+        }
+      },
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "BNA: Portail client React",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "dev:client"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "bna-frontend",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".+",
+          "endsPattern": "Local:"
+        }
+      },
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "BNA: Tout démarrer",
+      "dependsOn": ["BNA: Backend Spring Boot", "BNA: Portail client React"],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
-import api, { fetchHealth } from "./services/api";
+import api from "./services/api";
 import AccountBudget from "./features/accounts/AccountBudget";
 import ClientApplications from "./features/applications/ClientApplications";
 import AdminWorkspace from "./features/admin/AdminWorkspace";
 import CreditSimulator from "./features/simulation/CreditSimulator";
+import NotificationsPage from "./features/notifications/Notifications";
+import ClientSidebar from "./features/layout/ClientSidebar";
+import ClientTopbar from "./features/layout/ClientTopbar";
 import "./styles.css";
 
 const scenarios = [
@@ -22,6 +25,24 @@ const initialValues = {
   dureeMois: "",
   montantCreditDemande: "",
 };
+
+let notificationRefreshInFlight = null;
+
+function fetchNotificationData(token) {
+  if (notificationRefreshInFlight?.token === token) {
+    return notificationRefreshInFlight.promise;
+  }
+  const promise = Promise.all([
+    api.get("/client/notifications", { headers: { Authorization: `Bearer ${token}` } }),
+    api.get("/client/notifications/unread-count", { headers: { Authorization: `Bearer ${token}` } }),
+  ]);
+  notificationRefreshInFlight = { token, promise };
+  const clearRequest = () => {
+    if (notificationRefreshInFlight?.promise === promise) notificationRefreshInFlight = null;
+  };
+  promise.then(clearRequest, clearRequest);
+  return promise;
+}
 
 function errorMessage(error) {
   return error.response?.data?.detail
@@ -50,35 +71,54 @@ function App() {
   const [result, setResult] = useState(null);
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [applications, setApplications] = useState([]);
-  const [activeSection, setActiveSection] = useState("simulation");
+  const [notifications, setNotifications] = useState([]);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const [focusedApplicationId, setFocusedApplicationId] = useState(null);
+  const [activeSection, setActiveSection] = useState("dashboard");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [editingApplicationId, setEditingApplicationId] = useState(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
-  const [apiStatus, setApiStatus] = useState("Vérification de l’API…");
 
   useEffect(() => {
-    fetchHealth()
-      .then(() => setApiStatus("API disponible"))
-      .catch(() => setApiStatus("API indisponible"));
-  }, []);
-
-  useEffect(() => {
-    if (!token || user?.role !== "CLIENT") return;
-    api.get("/simulations/catalogue", { params: { scenario } })
-      .then(({ data }) => {
-        setCatalogue(data);
-        setValues((current) => {
-          const typeCredit = data[current.typeCredit] ? current.typeCredit : Object.keys(data)[0] || "";
-          const maxMonths = data[typeCredit]?.maxMonths;
-          const duration = Number(current.dureeMois) > 0 && Number(current.dureeMois) <= maxMonths
-            ? current.dureeMois
-            : maxMonths?.toString() || "";
-          return { ...current, typeCredit, dureeMois: duration };
+    if (!token || user?.role !== "CLIENT" || activeSection !== "simulation") return;
+    let active = true;
+    let latestRequest = 0;
+    const refreshCatalogue = () => {
+      const requestId = ++latestRequest;
+      api.get("/simulations/catalogue", { params: { scenario } })
+        .then(({ data }) => {
+          if (!active || requestId !== latestRequest) return;
+          setCatalogue(data);
+          setValues((current) => {
+            const typeCredit = data[current.typeCredit] ? current.typeCredit : Object.keys(data)[0] || "";
+            const maxMonths = data[typeCredit]?.maxMonths;
+            const duration = Number(current.dureeMois) > 0 && Number(current.dureeMois) <= maxMonths
+              ? current.dureeMois
+              : maxMonths?.toString() || "";
+            return { ...current, typeCredit, dureeMois: duration };
+          });
+          setNotice("");
+        })
+        .catch((error) => {
+          if (active && requestId === latestRequest) {
+            setCatalogue({});
+            setNotice(errorMessage(error));
+          }
         });
-        setNotice("");
-      })
-      .catch((error) => setNotice(errorMessage(error)));
-  }, [token, scenario, user?.role]);
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refreshCatalogue();
+    };
+    refreshCatalogue();
+    window.addEventListener("focus", refreshCatalogue);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refreshCatalogue);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [activeSection, token, scenario, user?.role]);
 
   useEffect(() => {
     if (!token) return;
@@ -96,6 +136,8 @@ function App() {
         localStorage.removeItem("bna_user");
         setToken(null);
         setUser(null);
+        setNotifications([]);
+        setUnreadNotificationCount(0);
         setCheckingSession(false);
         if (error.response?.status !== 401) setNotice(errorMessage(error));
       });
@@ -108,6 +150,33 @@ function App() {
       .then(({ data }) => setApplications(data))
       .catch((error) => setNotice(errorMessage(error)));
   }, [token, user?.role]);
+
+  useEffect(() => {
+    if (!token || checkingSession || user?.role !== "CLIENT") return undefined;
+    let active = true;
+    let requestInProgress = false;
+    const refresh = async () => {
+      if (requestInProgress) return;
+      requestInProgress = true;
+      try {
+        const [{ data: notificationData }, { data: countData }] = await fetchNotificationData(token);
+        if (active) {
+          setNotifications(notificationData);
+          setUnreadNotificationCount(countData.unreadCount);
+        }
+      } catch (error) {
+        if (active) setNotice(errorMessage(error));
+      } finally {
+        requestInProgress = false;
+      }
+    };
+    refresh();
+    const intervalId = window.setInterval(refresh, 30000);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [checkingSession, token, user?.role]);
 
   const scenarioInfo = scenarios.find((item) => item.value === scenario);
 
@@ -151,13 +220,21 @@ function App() {
 
   async function handleSimulation(event) {
     event.preventDefault();
+    const maxMonths = catalogue[values.typeCredit]?.maxMonths;
+    const durationMonths = Number(values.dureeMois);
+    if (!Number.isInteger(maxMonths) || durationMonths < 1 || durationMonths > maxMonths) {
+      setResult(null);
+      setConfirmationOpen(false);
+      setNotice(`La durée doit être comprise entre 1 et ${maxMonths || 0} mois pour ce produit et ce scénario.`);
+      return;
+    }
     setBusy(true);
     setNotice("");
     setResult(null);
     setConfirmationOpen(false);
     const payload = {
       salaireMensuelMoyen: Number(values.salaireMensuelMoyen),
-      cinquantePourcentLoyers: Number(values.loyerMensuel || 0) / 2,
+      loyerMensuel: Number(values.loyerMensuel || 0),
       retenuesSed: Number(values.retenuesSed || 0),
       typeCredit: values.typeCredit,
       dureeMois: Number(values.dureeMois),
@@ -312,25 +389,172 @@ function App() {
     setUser(null);
     setResult(null);
     setApplications([]);
+    setNotifications([]);
+    setUnreadNotificationCount(0);
+    setFocusedApplicationId(null);
     setEditingApplicationId(null);
     setCatalogue({});
     setNotice("");
   }
 
+  async function markNotificationRead(notificationId) {
+    try {
+      const { data } = await api.patch(`/client/notifications/${notificationId}/read`);
+      const wasUnread = notifications.some((item) => item.id === data.id && !item.isRead);
+      setNotifications((current) => current.map((item) => item.id === data.id ? data : item));
+      if (wasUnread) setUnreadNotificationCount((current) => Math.max(0, current - 1));
+      return true;
+    } catch (error) {
+      setNotice(errorMessage(error));
+      return false;
+    }
+  }
+
+  async function markAllNotificationsRead() {
+    try {
+      await api.patch("/client/notifications/read-all");
+      setNotifications((current) => current.map((item) => ({
+        ...item,
+        isRead: true,
+        readAt: item.readAt || new Date().toISOString(),
+      })));
+      setUnreadNotificationCount(0);
+    } catch (error) {
+      setNotice(errorMessage(error));
+    }
+  }
+
+  async function openNotifiedApplication(notification) {
+    if (!notification.applicationId) return;
+    if (!notification.isRead) {
+      const marked = await markNotificationRead(notification.id);
+      if (!marked) return;
+    }
+    try {
+      const { data } = await api.get("/applications");
+      setApplications(data);
+      setFocusedApplicationId(notification.applicationId);
+      setActiveSection("applications");
+    } catch (error) {
+      setNotice(errorMessage(error));
+    }
+  }
+
   function updateValue(event) {
-    setValues((current) => ({ ...current, [event.target.name]: event.target.value }));
+    const { name, value } = event.target;
+    setValues((current) => ({ ...current, [name]: value }));
+    setResult(null);
+    setConfirmationOpen(false);
   }
 
   return (
-    <main className="client-app">
-      <header className="topbar">
-        <a className="brand" href="#accueil">BNA <span>Digital Banking</span></a>
-        <div className="topbar-right">
-          <span className="api-indicator"><i />{apiStatus}</span>
-          {user && <span className="signed-in-user">{user.fullName} · {user.role === "ADMIN" ? "Administration" : "Client"}</span>}
-          {token && <button className="button button-quiet" onClick={logout}>Se déconnecter</button>}
-        </div>
-      </header>
+    <div className={`client-app${token && user?.role === "CLIENT" && !checkingSession ? " client-shell" : ""}`}>
+      {token && user?.role === "CLIENT" && !checkingSession ? (
+        <>
+          <ClientSidebar
+            activeSection={activeSection}
+            applicationCount={applications.length}
+            unreadCount={unreadNotificationCount}
+            onNavigate={setActiveSection}
+            open={sidebarOpen}
+            onClose={() => setSidebarOpen(false)}
+          />
+          <div className="client-main">
+            <ClientTopbar
+              user={user}
+              notifications={notifications}
+              unreadCount={unreadNotificationCount}
+              onOpenNotification={openNotifiedApplication}
+              onMarkRead={markNotificationRead}
+              onMarkAllAsRead={markAllNotificationsRead}
+              onViewAllNotifications={() => setActiveSection("notifications")}
+              onLogout={logout}
+              onMenuToggle={() => setSidebarOpen((current) => !current)}
+            />
+            <main className="client-content">
+              <header className="content-heading">
+                <div>
+                  <p className="eyebrow">Espace client BNA</p>
+                  <h1>{{
+                    dashboard: "Dashboard",
+                    accounts: "Mes comptes",
+                    operations: "Opérations",
+                    budget: "Mon budget",
+                    simulation: "Simulation de crédit",
+                    applications: "Mes demandes",
+                    notifications: "Notifications",
+                  }[activeSection] || "Espace client"}</h1>
+                  <p>{{
+                    dashboard: "Votre situation financière et vos services en un coup d’œil.",
+                    accounts: "Consultez vos comptes et leurs soldes de démonstration.",
+                    operations: "Historique et mouvements de vos comptes fictifs.",
+                    budget: "Suivez vos dépenses et vos objectifs mensuels.",
+                    simulation: "Simulez votre projet et suivez les étapes de votre demande.",
+                    applications: "Consultez vos demandes, leur statut et votre scoring Java.",
+                    notifications: "Suivez les évolutions de vos demandes de crédit.",
+                  }[activeSection] || ""}</p>
+                </div>
+              </header>
+              {notice && <p className="notice page-notice" role="alert">{notice}</p>}
+              <AccountBudget
+                view={activeSection}
+                user={user}
+                applications={applications}
+                notifications={notifications}
+                unreadCount={unreadNotificationCount}
+                onNavigate={setActiveSection}
+              />
+              {activeSection === "notifications" ? <NotificationsPage
+                notifications={notifications}
+                unreadCount={unreadNotificationCount}
+                onOpen={openNotifiedApplication}
+                onMarkRead={markNotificationRead}
+                onMarkAllAsRead={markAllNotificationsRead}
+              /> : activeSection === "applications" ? <ClientApplications
+                applications={applications}
+                busy={busy}
+                onEditDraft={editDraft}
+                onResumeDraft={editDraft}
+                onProvideInfo={provideAdditionalInfo}
+                onWithdraw={withdrawApplication}
+                focusApplicationId={focusedApplicationId}
+              /> : activeSection === "simulation" ? <CreditSimulator
+                scenarios={scenarios}
+                scenario={scenario}
+                onScenarioChange={(event) => {
+                  setScenario(event.target.value);
+                  setCatalogue({});
+                  setValues((current) => ({ ...current, typeCredit: "", dureeMois: "" }));
+                  setResult(null);
+                  setConfirmationOpen(false);
+                }}
+                catalogue={catalogue}
+                values={values}
+                onValueChange={updateValue}
+                onProductChange={(event) => {
+                  const selected = catalogue[event.target.value];
+                  setValues((current) => ({ ...current, typeCredit: event.target.value, dureeMois: selected?.maxMonths?.toString() || "" }));
+                  setResult(null);
+                  setConfirmationOpen(false);
+                }}
+                isBuyout={scenario !== "SANS_RACHAT"}
+                busy={busy}
+                result={result}
+                onSimulate={handleSimulation}
+                onSaveDraft={saveDraft}
+                onBeginConfirmation={() => setConfirmationOpen(true)}
+                onConfirmSubmission={createAndSubmitApplication}
+                confirming={confirmationOpen}
+                editing={Boolean(editingApplicationId)}
+              /> : null}
+            </main>
+          </div>
+        </>
+      ) : user?.role === "ADMIN" && !checkingSession ? null : (
+        <header className="topbar">
+          <a className="brand" href="#accueil">BNA <span>Digital Banking</span></a>
+        </header>
+      )}
       {!token ? (
         <section className="auth-layout">
           <div className="intro-panel">
@@ -362,59 +586,10 @@ function App() {
       ) : checkingSession || !user ? (
         <div className="workspace"><div className="card loading-card">Vérification de votre session…</div></div>
       ) : user.role === "ADMIN" ? (
-        <AdminWorkspace />
-      ) : user.role === "CLIENT" ? (
-        <div className="workspace">
-          <section className="page-heading">
-            <p className="eyebrow">Espace client</p>
-            <h1>{activeSection === "accounts" ? "Mes comptes et mon budget" : "Vos demandes de crédit"}</h1>
-            <p>{activeSection === "accounts"
-              ? "Consultez vos comptes fictifs et suivez vos opérations et objectifs mensuels."
-              : "Simulez, vérifiez les informations puis soumettez votre demande."}</p>
-          </section>
-          <div className="tab-switch workspace-tabs" role="tablist" aria-label="Espace client">
-            <button type="button" className={activeSection === "simulation" ? "active" : ""} onClick={() => setActiveSection("simulation")}>Demander un crédit</button>
-            <button type="button" className={activeSection === "applications" ? "active" : ""} onClick={() => setActiveSection("applications")}>Mes demandes ({applications.length})</button>
-            <button type="button" className={activeSection === "accounts" ? "active" : ""} onClick={() => setActiveSection("accounts")}>Mes comptes & budget</button>
-          </div>
-          {notice && <p className="notice page-notice" role="alert">{notice}</p>}
-          {activeSection === "accounts" ? <AccountBudget /> : activeSection === "applications" ? <ClientApplications
-            applications={applications}
-            busy={busy}
-            onEditDraft={editDraft}
-            onResumeDraft={editDraft}
-            onProvideInfo={provideAdditionalInfo}
-            onWithdraw={withdrawApplication}
-          /> : <CreditSimulator
-            scenarios={scenarios}
-            scenario={scenario}
-            onScenarioChange={(event) => {
-              setScenario(event.target.value);
-              setResult(null);
-              setConfirmationOpen(false);
-            }}
-            catalogue={catalogue}
-            values={values}
-            onValueChange={updateValue}
-            onProductChange={(event) => {
-              const selected = catalogue[event.target.value];
-              setValues((current) => ({ ...current, typeCredit: event.target.value, dureeMois: selected?.maxMonths?.toString() || "" }));
-              setResult(null);
-              setConfirmationOpen(false);
-            }}
-            isBuyout={scenario !== "SANS_RACHAT"}
-            busy={busy}
-            result={result}
-            onSimulate={handleSimulation}
-            onSaveDraft={saveDraft}
-            onBeginConfirmation={() => setConfirmationOpen(true)}
-            onConfirmSubmission={createAndSubmitApplication}
-            confirming={confirmationOpen}
-            editing={Boolean(editingApplicationId)}
-          />}
-        </div>
-      ) : <div className="workspace"><p className="notice" role="alert">Rôle non reconnu. Déconnectez-vous puis contactez l’administrateur.</p></div>}
-    </main>
+        <AdminWorkspace user={user} onLogout={logout} />
+      ) : user.role === "CLIENT" ? null
+      : <div className="workspace"><p className="notice" role="alert">Rôle non reconnu. Déconnectez-vous puis contactez l’administrateur.</p></div>}
+    </div>
   );
 }
 

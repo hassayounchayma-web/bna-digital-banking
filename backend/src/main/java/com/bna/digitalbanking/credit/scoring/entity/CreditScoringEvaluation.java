@@ -68,6 +68,16 @@ public class CreditScoringEvaluation {
         this.evaluatedAt = Instant.now();
     }
 
+    public void refreshFrom(CreditScoringEvaluation refreshed) {
+        scoreOutOf100 = refreshed.scoreOutOf100;
+        riskLevel = refreshed.riskLevel;
+        provisional = refreshed.provisional;
+        factors.clear();
+        factors.addAll(refreshed.factors);
+        evaluatedAt = refreshed.evaluatedAt;
+    }
+
+    public CreditApplication getApplication() { return application; }
     public BigDecimal getScoreOutOf100() { return scoreOutOf100; }
     public CreditRiskLevel getRiskLevel() { return riskLevel; }
     public boolean isProvisional() { return provisional; }

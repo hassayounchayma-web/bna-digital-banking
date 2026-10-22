@@ -72,6 +72,7 @@ public class ApplicationEvent {
     }
 
     public Long getId() { return id; }
+    public CreditApplication getApplication() { return application; }
     public String getActorEmail() { return actorEmail; }
     public UserRole getActorRole() { return actorRole; }
     public ApplicationStatus getFromStatus() { return fromStatus; }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { applicationScenarioLabel, applicationStatusLabel } from "./statusLabels";
 import CreditScoringPanel from "../scoring/CreditScoringPanel";
 
@@ -11,13 +11,24 @@ export default function ClientApplications({
   onResumeDraft,
   onProvideInfo,
   onWithdraw,
+  focusApplicationId,
 }) {
   const [notes, setNotes] = useState({});
+
+  useEffect(() => {
+    if (!focusApplicationId) return;
+    document.querySelector(`[data-application-id="${focusApplicationId}"]`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focusApplicationId, applications]);
 
   return (
     <section className="application-list">
       {applications.length === 0 ? <div className="card empty-result">Vous n’avez pas encore de demande de crédit.</div> : applications.map((application) => (
-        <article className="card application-card" key={application.id}>
+        <article
+          className={`card application-card${application.id === focusApplicationId ? " application-card-focused" : ""}`}
+          data-application-id={application.id}
+          key={application.id}
+        >
           <div className="application-heading">
             <div><p className="eyebrow">{application.reference?.slice(0, 8) ?? "Référence indisponible"} · {applicationScenarioLabel(application.scenario)}</p><h2>{application.creditType || "Produit non renseigné"}</h2></div>
             <span className={`result-status ${application.status === "APPROVED" ? "success" : "warning"}`}>{applicationStatusLabel(application.status)}</span>

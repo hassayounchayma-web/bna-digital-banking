@@ -70,9 +70,6 @@ public class CreditApplication {
     @Column(name = "income_stability_months")
     private Integer incomeStabilityMonths;
 
-    @Column(name = "late_payments_last_12_months")
-    private Integer latePaymentsLast12Months;
-
     @Column(name = "savings_regular_months_last_12")
     private Integer savingsRegularityMonthsLast12Months;
 
@@ -117,10 +114,8 @@ public class CreditApplication {
 
     public void updateScoringEvidence(
             Integer incomeStabilityMonths,
-            Integer latePaymentsLast12Months,
             Integer savingsRegularityMonthsLast12Months) {
         this.incomeStabilityMonths = incomeStabilityMonths;
-        this.latePaymentsLast12Months = latePaymentsLast12Months;
         this.savingsRegularityMonthsLast12Months = savingsRegularityMonthsLast12Months;
     }
 
@@ -161,7 +156,6 @@ public class CreditApplication {
     public BigDecimal getBnaNonBuyoutDeductions() { return bnaNonBuyoutDeductions; }
     public BigDecimal getRemainingBuyoutCapital() { return remainingBuyoutCapital; }
     public Integer getIncomeStabilityMonths() { return incomeStabilityMonths; }
-    public Integer getLatePaymentsLast12Months() { return latePaymentsLast12Months; }
     public Integer getSavingsRegularityMonthsLast12Months() { return savingsRegularityMonthsLast12Months; }
     public ApplicationStatus getStatus() { return status; }
     public Instant getCreatedAt() { return createdAt; }

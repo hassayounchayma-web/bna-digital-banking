@@ -115,21 +115,20 @@ Les simulations doivent utiliser des montants décimaux (`DECIMAL` / `BigDecimal
 
 | Facteur | Poids maximal | Base de calcul |
 | --- | ---: | --- |
-| Endettement | 30 | Points linéaires décroissants selon le taux d'endettement calculé après la mensualité demandée. |
-| Revenu disponible | 25 | Part du revenu retenu restant après mensualité, plafonnée selon la configuration de démonstration. |
-| Stabilité des revenus | 20 | Nombre de mois consécutifs avec une opération `SALARY` observée, plafonné au nombre de mois configuré. |
-| Historique de remboursement | 15 | Nombre de retards dans le profil de démonstration synthétique ; pénalité configurée par retard. Ce facteur n'est pas une observation de paiements réels. |
-| Régularité de l'épargne | 10 | Nombre de mois avec un virement interne entrant observé sur le compte épargne au cours des 12 derniers mois. |
+| Endettement | 25 | Points linéaires décroissants selon le taux d'endettement calculé après la mensualité demandée. |
+| Revenu disponible | 20 | Part du revenu retenu restant après mensualité, plafonnée selon la configuration de démonstration. |
+| Stabilité des revenus | 34 | Nombre de mois consécutifs avec une opération `SALARY` observée, plafonné au nombre de mois configuré. |
+| Régularité de l'épargne | 21 | Nombre de mois avec un virement interne entrant observé sur le compte épargne au cours des 12 derniers mois. |
 
-Les facteurs financiers sont calculés côté serveur à partir de la simulation. La stabilité et l'épargne sont dérivées des transactions fictives effectivement enregistrées dans l'application ; l'absence d'observations est conservée comme donnée manquante et ne devient pas zéro. Les retards sont générés par un profil synthétique stable par client uniquement pour les démonstrations : ils ne proviennent pas d'un échéancier, d'un débit réel ou d'un bureau de crédit. Le total est normalisé sur 100 à partir des poids disponibles et signalé comme provisoire tant qu'un facteur manque. Les seuils d'affichage sont faible (75–100), modéré (50–74,99) et élevé (0–49,99). Il s'agit uniquement d'un barème académique fictif, non d'une règle officielle BNA. Le score ne constitue ni une éligibilité bancaire ni une décision d'octroi ; accepter ou refuser reste une action humaine de l'administrateur.
+Le critère d'historique de remboursement synthétique a été retiré : aucun retard n'est généré ou intégré au score. Au démarrage, les évaluations persistées sont recalculées avec les poids et facteurs courants. Les poids des quatre critères restants totalisent 100. Les facteurs financiers sont calculés côté serveur à partir de la simulation. La stabilité et l'épargne sont dérivées des transactions fictives effectivement enregistrées dans l'application ; l'absence d'observations est conservée comme donnée manquante et ne devient pas zéro. Le score est calculé sur 100 à partir des poids disponibles et signalé comme provisoire tant qu'un facteur manque. Les seuils d'affichage sont faible (75–100), modéré (50–74,99) et élevé (0–49,99). Il s'agit uniquement d'un barème académique fictif, non d'une règle officielle BNA. Le score ne constitue ni une éligibilité bancaire ni une décision d'octroi ; accepter ou refuser reste une action humaine de l'administrateur.
 
-Les paramètres modifiables du barème de démonstration sont `SCORING_AVAILABLE_INCOME_FULL_SCORE_RATIO` (défaut 0,30), `SCORING_INCOME_STABILITY_FULL_SCORE_MONTHS` (24), `SCORING_LATE_PAYMENT_PENALTY_POINTS` (3) et `SCORING_SAVINGS_FULL_SCORE_MONTHS` (12).
+Les paramètres modifiables du barème de démonstration sont `SCORING_AVAILABLE_INCOME_FULL_SCORE_RATIO` (défaut 0,30), `SCORING_INCOME_STABILITY_FULL_SCORE_MONTHS` (24) et `SCORING_SAVINGS_FULL_SCORE_MONTHS` (12).
 
 ### 7.2 Analyse IA et comparaison indépendante
 
 Pendant l'instruction (`UNDER_REVIEW`), un administrateur peut déclencher ou relancer l'analyse IA. Le backend envoie uniquement les faits métier nécessaires à l'évaluation (scénario, montant et durée demandés, valeurs financières de la simulation et déclarations facultatives). Le contrat transmis au fournisseur n'inclut ni nom, ni email, ni référence de demande, ni CIN, ni numéro de compte ou identifiant client. Le service demande un JSON contenant `eligibility_status`, `risk_level`, `reasons`, `missing_information` et `warnings` ; le backend valide strictement ces champs avant persistance.
 
-L'adaptateur est compatible avec l'API OpenAI Chat Completions. Il est désactivé par défaut ; les variables `LLM_ENABLED`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, `LLM_CONNECT_TIMEOUT` et `LLM_READ_TIMEOUT` le configurent. Si l'intégration est désactivée ou indisponible, l'évaluation est enregistrée avec un statut explicite et le score Java demeure inchangé. Une réponse invalide est également marquée comme telle. Les résultats Java et IA, ainsi que leurs comparaisons d'éligibilité et de risque, restent indépendants. L'IA ne calcule pas le montant maximal officiel et aucune divergence ou convergence ne déclenche une décision ; l'administrateur reste seul responsable de la décision humaine motivée.
+L'adaptateur appelle directement l'API Gemini native `models/{model}:generateContent` ; il n'utilise pas l'API OpenAI ni son format. Il est désactivé par défaut ; les variables `LLM_ENABLED`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, `LLM_CONNECT_TIMEOUT` et `LLM_READ_TIMEOUT` le configurent. Si l'intégration est désactivée ou indisponible, l'évaluation est enregistrée avec un statut explicite et le score Java demeure inchangé. Une réponse invalide est également marquée comme telle. Les résultats Java et IA, ainsi que leurs comparaisons d'éligibilité et de risque, restent indépendants. L'IA ne calcule pas le montant maximal officiel et aucune divergence ou convergence ne déclenche une décision ; l'administrateur reste seul responsable de la décision humaine motivée.
 
 ## 8. API REST proposée pour le MVP
 
@@ -208,7 +207,7 @@ Pour éviter une réécriture risquée, `identity/` et `simulation/` conservent 
 
 ### Frontend — application commune organisée par fonctionnalités
 
-Le portail commun est hébergé dans `frontend-client/` pour préserver le projet Vite déjà fonctionnel. Le rôle renvoyé par l'API sélectionne l’espace client ou admin. `frontend-admin/` est conservé comme point d’entrée de compatibilité et redirige vers le portail commun.
+Le portail commun est hébergé dans `frontend-client/` pour préserver le projet Vite déjà fonctionnel. Le rôle renvoyé par l'API sélectionne l’espace client ou admin ; les deux espaces partagent cette application.
 
 ```text
 frontend-client/src/

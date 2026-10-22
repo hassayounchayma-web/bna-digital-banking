@@ -9,13 +9,13 @@ import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 
 public record RachatInterneRequest(
-    @NotNull @Positive BigDecimal salaireMensuelMoyen,
-    @NotNull @PositiveOrZero BigDecimal cinquantePourcentLoyers,
+    @NotNull @PositiveOrZero BigDecimal salaireMensuelMoyen,
+    @NotNull @PositiveOrZero BigDecimal loyerMensuel,
     @NotNull @PositiveOrZero BigDecimal retenuesSed,
     @NotNull @PositiveOrZero BigDecimal retenuesCreditsBnaNonRachete,
-    @NotNull @PositiveOrZero BigDecimal capitalRestantARacheter,
+    @NotNull @Positive BigDecimal capitalRestantARacheter,
     @NotBlank @Size(max = 255) String typeCredit,
     @Min(1) int dureeMois,
-    @PositiveOrZero BigDecimal montantCreditDemande
+    @Positive BigDecimal montantCreditDemande
 ) {
 }

@@ -1,16 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowDownUp, ArrowRight, Plus, Wallet } from "lucide-react";
 import api from "../../services/api";
-
-const currency = new Intl.NumberFormat("fr-TN", { style: "currency", currency: "TND" });
-
-function today() {
-  const date = new Date();
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function currentMonth() {
-  return today().slice(0, 7);
-}
+import AccountModals from "./AccountModals";
+import ClientDashboard from "./ClientDashboard";
+import { currency, currentMonth, today, transactionLabels } from "./accountData";
 
 function messageFrom(error) {
   return error.response?.data?.detail
@@ -19,14 +12,88 @@ function messageFrom(error) {
     || "Impossible de contacter le service.";
 }
 
-const transactionLabels = {
-  INCOME: "Revenu",
-  EXPENSE: "Dépense",
-  TRANSFER_IN: "Virement reçu",
-  TRANSFER_OUT: "Virement envoyé",
-};
+function DashboardLink({ children, onClick }) {
+  return <button className="dashboard-link" type="button" onClick={onClick}>{children}<ArrowRight size={15} /></button>;
+}
 
-export default function AccountBudget() {
+function AccountCards({ accounts, selectedAccountId, onSelect }) {
+  return (
+    <section className="account-cards" aria-label="Comptes fictifs">
+      {accounts.map((account, index) => (
+        <button
+          type="button"
+          className={`card account-card account-card-${index % 2}${String(account.id) === selectedAccountId ? " active" : ""}`}
+          key={account.id}
+          onClick={() => onSelect(String(account.id))}
+        >
+          <span className="account-card-top"><span>{account.name}</span><Wallet size={18} /></span>
+          <strong>{currency.format(account.currentBalance)}</strong>
+          <small>Solde initial fictif : {currency.format(account.openingBalance)}</small>
+          <small>Référence {account.reference.slice(0, 8)} · {account.currency}</small>
+        </button>
+      ))}
+      {accounts.length === 0 && <div className="card empty-card">Chargement des comptes…</div>}
+    </section>
+  );
+}
+
+function TransactionTable({ transactions, emptyMessage }) {
+  if (!transactions.length) return <div className="table-empty">{emptyMessage}</div>;
+  return (
+    <div className="table-wrap">
+      <table className="modern-table">
+        <thead><tr><th>Date</th><th>Opération</th><th>Catégorie</th><th>Description</th><th>Montant</th></tr></thead>
+        <tbody>{transactions.map((transaction) => {
+          const incoming = ["INCOME", "TRANSFER_IN"].includes(transaction.type);
+          return <tr key={transaction.id}>
+            <td>{transaction.occurredAt}</td>
+            <td><span className={`transaction-badge${incoming ? " is-income" : ""}`}>{transactionLabels[transaction.type]}</span></td>
+            <td>{transaction.categoryLabel ?? "Virement interne"}</td>
+            <td>{transaction.description || "—"}</td>
+            <td className={incoming ? "amount-in" : "amount-out"}>{incoming ? "+" : "−"}{currency.format(transaction.amount)}</td>
+          </tr>;
+        })}</tbody>
+      </table>
+    </div>
+  );
+}
+
+function BudgetCategoryCard({ category, value, onChange, onSave, busy }) {
+  const progress = category.monthlyLimit > 0 ? Math.min(100, (category.spent / category.monthlyLimit) * 100) : 0;
+  return (
+    <article className={`budget-category-card${category.exceeded ? " is-exceeded" : ""}`}>
+      <div className="budget-category-heading">
+        <div><h3>{category.label}</h3><small>{category.exceeded ? "Limite dépassée" : "Suivi du mois"}</small></div>
+        {category.exceeded && <span className="budget-status">Dépassement</span>}
+      </div>
+      <strong className="budget-spent">{currency.format(category.spent)}</strong>
+      {category.monthlyLimit > 0 && <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>}
+      <form className="budget-limit-form" onSubmit={(event) => onSave(event, category.category)}>
+        <label>Limite mensuelle (DT)
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            value={value ?? ""}
+            onChange={(event) => onChange(category.category, event.target.value)}
+            aria-label={`Limite mensuelle ${category.label}`}
+          />
+        </label>
+        <button type="submit" className="button button-small" disabled={busy || !value}>Enregistrer</button>
+      </form>
+      <p className="budget-remaining">Restant : <strong>{category.remaining == null ? "—" : currency.format(category.remaining)}</strong></p>
+    </article>
+  );
+}
+
+export default function AccountBudget({
+  view,
+  user,
+  applications,
+  notifications,
+  unreadCount,
+  onNavigate,
+}) {
   const [accounts, setAccounts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [transactions, setTransactions] = useState([]);
@@ -48,6 +115,9 @@ export default function AccountBudget() {
     description: "",
   });
   const [limits, setLimits] = useState({});
+  const [modal, setModal] = useState(null);
+  const [search, setSearch] = useState("");
+  const [transactionType, setTransactionType] = useState("ALL");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [noticeKind, setNoticeKind] = useState("error");
@@ -65,8 +135,12 @@ export default function AccountBudget() {
       : String(data[0]?.id ?? ""));
     setTransfer((current) => ({
       ...current,
-      sourceAccountId: current.sourceAccountId || String(data[0]?.id ?? ""),
-      destinationAccountId: current.destinationAccountId || String(data[1]?.id ?? ""),
+      sourceAccountId: data.some((account) => String(account.id) === current.sourceAccountId)
+        ? current.sourceAccountId
+        : String(data[0]?.id ?? ""),
+      destinationAccountId: data.some((account) => String(account.id) === current.destinationAccountId)
+        ? current.destinationAccountId
+        : String(data[1]?.id ?? ""),
     }));
   }, []);
 
@@ -82,6 +156,7 @@ export default function AccountBudget() {
 
   const loadTransactions = useCallback(async () => {
     if (!selectedAccountId) {
+      setTransactions([]);
       return;
     }
     const { data } = await api.get(`/accounts/${selectedAccountId}/transactions`);
@@ -101,8 +176,8 @@ export default function AccountBudget() {
         setSelectedAccountId(String(accountResponse.data[0]?.id ?? ""));
         setTransfer((current) => ({
           ...current,
-          sourceAccountId: current.sourceAccountId || String(accountResponse.data[0]?.id ?? ""),
-          destinationAccountId: current.destinationAccountId || String(accountResponse.data[1]?.id ?? ""),
+          sourceAccountId: String(accountResponse.data[0]?.id ?? ""),
+          destinationAccountId: String(accountResponse.data[1]?.id ?? ""),
         }));
         setCategories(categoryResponse.data);
       } catch (error) {
@@ -161,6 +236,7 @@ export default function AccountBudget() {
       setOperation((current) => ({ ...current, amount: "", description: "" }));
       setNotice("L’opération fictive a été enregistrée.");
       setNoticeKind("success");
+      setModal(null);
     } catch (error) {
       setNotice(messageFrom(error));
       setNoticeKind("error");
@@ -182,6 +258,7 @@ export default function AccountBudget() {
       setTransfer((current) => ({ ...current, amount: "", description: "" }));
       setNotice("Le virement interne fictif a été enregistré.");
       setNoticeKind("success");
+      setModal(null);
     } catch (error) {
       setNotice(messageFrom(error));
       setNoticeKind("error");
@@ -215,161 +292,148 @@ export default function AccountBudget() {
     }
   }
 
-  return (
-    <section className="account-budget">
-      <div className="page-heading">
-        <p className="eyebrow">Espace client · données de démonstration</p>
-        <h1>Mes comptes et mon budget</h1>
-        <p>Comptes, soldes et opérations fictifs : aucun service bancaire réel n’est connecté.</p>
+  const visibleTransactions = transactions.filter((transaction) => {
+    const matchesType = transactionType === "ALL" || transaction.type === transactionType;
+    const query = search.trim().toLocaleLowerCase("fr");
+    const matchesSearch = !query || [
+      transaction.description,
+      transaction.categoryLabel,
+      transactionLabels[transaction.type],
+    ].some((value) => String(value || "").toLocaleLowerCase("fr").includes(query));
+    return matchesType && matchesSearch;
+  });
+
+  function renderNotice() {
+    return notice ? <p className={`notice ${noticeKind}`} role="status">{notice}</p> : null;
+  }
+
+  if (view === "dashboard") {
+    return <div className="account-budget">
+      {renderNotice()}
+      <ClientDashboard
+        user={user}
+        accounts={accounts}
+        transactions={transactions}
+        budget={budget}
+        applications={applications}
+        notifications={notifications}
+        unreadCount={unreadCount}
+        onNavigate={onNavigate}
+      />
+    </div>;
+  }
+
+  if (view === "accounts") {
+    return <section className="account-budget">
+      {renderNotice()}
+      <div className="page-intro">
+        <div><p className="eyebrow">Patrimoine · comptes fictifs</p><h1>Mes comptes</h1><p>Consultez vos soldes et les détails de vos comptes de démonstration.</p></div>
+        <button className="button button-primary" type="button" onClick={() => onNavigate("operations")}><Plus size={17} /> Nouvelle opération</button>
       </div>
-      {notice && <p className={`notice ${noticeKind}`} role="status">{notice}</p>}
-
-      <section className="account-cards" aria-label="Comptes fictifs">
-        {accounts.map((account) => (
-          <button
-            type="button"
-            className={`card account-card ${String(account.id) === selectedAccountId ? "active" : ""}`}
-            key={account.id}
-            onClick={() => setSelectedAccountId(String(account.id))}
-          >
-            <span>{account.name}</span>
-            <strong>{currency.format(account.currentBalance)}</strong>
-            <small>Solde initial fictif : {currency.format(account.openingBalance)}</small>
-            <small>Référence {account.reference.slice(0, 8)} · {account.currency}</small>
-          </button>
-        ))}
-        {accounts.length === 0 && <div className="card empty-card">Chargement des comptes…</div>}
-      </section>
-
-      <div className="account-actions-grid">
-        <form className="card account-form" onSubmit={submitOperation}>
-          <h2>Ajouter un revenu ou une dépense fictive</h2>
-          <label>Compte
-            <select required value={selectedAccountId} onChange={(event) => setSelectedAccountId(event.target.value)}>
-              {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
-            </select>
-          </label>
-          <label>Type d’opération
-            <select value={operation.type} onChange={(event) => setOperation((current) => ({
-              ...current,
-              type: event.target.value,
-              category: "",
-            }))}>
-              <option value="INCOME">Revenu</option>
-              <option value="EXPENSE">Dépense</option>
-            </select>
-          </label>
-          <label>Catégorie
-            <select required value={operation.category} onChange={(event) => setOperation((current) => ({ ...current, category: event.target.value }))}>
-              <option value="">Choisir une catégorie</option>
-              {operationCategories.map((category) => <option key={category.code} value={category.code}>{category.label}</option>)}
-            </select>
-          </label>
-          <div className="field-grid">
-            <label>Montant (DT)
-              <input required type="number" min="0.01" step="0.01" value={operation.amount} onChange={(event) => setOperation((current) => ({ ...current, amount: event.target.value }))} />
-            </label>
-            <label>Date
-              <input required type="date" value={operation.occurredAt} onChange={(event) => setOperation((current) => ({ ...current, occurredAt: event.target.value }))} />
-            </label>
-          </div>
-          <label>Description (facultative)
-            <input maxLength="200" value={operation.description} onChange={(event) => setOperation((current) => ({ ...current, description: event.target.value }))} />
-          </label>
-          <button className="button button-primary" disabled={busy || !selectedAccountId}>{busy ? "Enregistrement…" : "Enregistrer l’opération"}</button>
-        </form>
-
-        <form className="card account-form" onSubmit={submitTransfer}>
-          <h2>Virement interne fictif</h2>
-          <label>Compte source
-            <select required value={transfer.sourceAccountId} onChange={(event) => setTransfer((current) => {
-              const sourceAccountId = event.target.value;
-              const destinationAccountId = sourceAccountId === current.destinationAccountId
-                ? String(accounts.find((account) => String(account.id) !== sourceAccountId)?.id ?? "")
-                : current.destinationAccountId;
-              return { ...current, sourceAccountId, destinationAccountId };
-            })}>
-              {accounts.map((account) => <option key={account.id} value={account.id}>{account.name} · {currency.format(account.currentBalance)}</option>)}
-            </select>
-          </label>
-          <label>Compte destinataire
-            <select required value={transfer.destinationAccountId} onChange={(event) => setTransfer((current) => ({ ...current, destinationAccountId: event.target.value }))}>
-              {accounts.map((account) => <option key={account.id} value={account.id} disabled={String(account.id) === transfer.sourceAccountId}>{account.name}</option>)}
-            </select>
-          </label>
-          <div className="field-grid">
-            <label>Montant (DT)
-              <input required type="number" min="0.01" step="0.01" value={transfer.amount} onChange={(event) => setTransfer((current) => ({ ...current, amount: event.target.value }))} />
-            </label>
-            <label>Date
-              <input required type="date" value={transfer.occurredAt} onChange={(event) => setTransfer((current) => ({ ...current, occurredAt: event.target.value }))} />
-            </label>
-          </div>
-          <label>Description (facultative)
-            <input maxLength="200" value={transfer.description} onChange={(event) => setTransfer((current) => ({ ...current, description: event.target.value }))} />
-          </label>
-          <p className="field-hint">Le virement est débité et crédité simultanément ; il ne compte ni comme revenu ni comme dépense du budget.</p>
-          <button className="button button-primary" disabled={busy || accounts.length < 2}>{busy ? "Enregistrement…" : "Effectuer le virement fictif"}</button>
-        </form>
-      </div>
-
+      <AccountCards accounts={accounts} selectedAccountId={selectedAccountId} onSelect={setSelectedAccountId} />
       <section className="card transaction-section">
-        <div className="section-heading">
-          <h2>Opérations du compte</h2>
-          <label>Compte affiché
+        <header className="dashboard-panel-heading">
+          <div><p className="eyebrow">Activité récente</p><h2>Opérations du compte</h2></div>
+          <label className="compact-field">Compte affiché
             <select value={selectedAccountId} onChange={(event) => setSelectedAccountId(event.target.value)}>
               {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
             </select>
           </label>
-        </div>
-        {transactions.length === 0 ? <p className="empty-card">Aucune opération enregistrée sur ce compte.</p> : (
-          <div className="table-wrap"><table>
-            <thead><tr><th>Date</th><th>Opération</th><th>Catégorie</th><th>Description</th><th>Montant</th></tr></thead>
-            <tbody>{transactions.map((transaction) => (
-              <tr key={transaction.id}>
-                <td>{transaction.occurredAt}</td>
-                <td>{transactionLabels[transaction.type]}</td>
-                <td>{transaction.categoryLabel ?? "Virement interne"}</td>
-                <td>{transaction.description || "—"}</td>
-                <td>{currency.format(transaction.amount)}</td>
-              </tr>
-            ))}</tbody>
-          </table></div>
-        )}
+        </header>
+        <TransactionTable transactions={transactions.slice(0, 5)} emptyMessage="Aucune opération enregistrée sur ce compte." />
+        <DashboardLink onClick={() => onNavigate("operations")}>Consulter toutes les opérations</DashboardLink>
       </section>
+      <p className="dashboard-disclaimer">Comptes, soldes et opérations fictifs : aucun service bancaire réel n’est connecté.</p>
+    </section>;
+  }
 
-      <section className="card budget-section">
-        <div className="section-heading">
-          <div><p className="eyebrow">Suivi à partir des opérations</p><h2>Self-budgeting mensuel</h2></div>
-          <label>Mois
-            <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
-          </label>
+  if (view === "operations") {
+    return <section className="account-budget">
+      {renderNotice()}
+      <div className="page-intro">
+        <div><p className="eyebrow">Activité du compte · données fictives</p><h1>Opérations</h1><p>Retrouvez l’historique et gérez vos mouvements de démonstration.</p></div>
+        <div className="page-actions">
+          <button className="button button-quiet" type="button" onClick={() => setModal("transfer")} disabled={accounts.length < 2}><ArrowDownUp size={17} /> Virement fictif</button>
+          <button className="button button-primary" type="button" onClick={() => setModal("operation")}><Plus size={17} /> Ajouter une opération</button>
         </div>
-        <p className="budget-totals">Revenus : {currency.format(budget?.totalIncome ?? 0)} · Dépenses : {currency.format(budget?.totalExpenses ?? 0)}</p>
-        <p className="field-hint">Les limites sont des objectifs personnels : un dépassement est signalé, mais n’empêche pas d’enregistrer une dépense.</p>
-        {!budget ? <p>Chargement du budget…</p> : (
-          <div className="table-wrap"><table>
-            <thead><tr><th>Catégorie</th><th>Limite mensuelle (DT)</th><th>Dépensé</th><th>Restant</th><th></th></tr></thead>
-            <tbody>{budget.categories.map((category) => (
-              <tr key={category.category} className={category.exceeded ? "budget-exceeded" : ""}>
-                <td>{category.label}</td>
-                <td><input
-                  className="table-input"
-                  aria-label={`Limite mensuelle ${category.label}`}
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  value={limits[category.category] ?? ""}
-                  onChange={(event) => setLimits((current) => ({ ...current, [category.category]: event.target.value }))}
-                /></td>
-                <td>{currency.format(category.spent)}</td>
-                <td>{category.remaining == null ? "—" : currency.format(category.remaining)}</td>
-                <td><button type="button" className="button button-small" disabled={busy || !month || !limits[category.category]} onClick={(event) => saveBudgetLimit(event, category.category)}>Enregistrer</button></td>
-              </tr>
-            ))}</tbody>
-          </table></div>
-        )}
+      </div>
+      <div className="operation-summary">
+        <div><span>Compte</span><select value={selectedAccountId} onChange={(event) => setSelectedAccountId(event.target.value)}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></div>
+        <div><span>Solde actuel fictif</span><strong>{currency.format(accounts.find((account) => String(account.id) === selectedAccountId)?.currentBalance ?? 0)}</strong></div>
+        <div><span>Opérations</span><strong>{transactions.length}</strong></div>
+      </div>
+      <section className="card transaction-section">
+        <header className="transaction-toolbar">
+          <div><h2>Historique des opérations</h2><p>{visibleTransactions.length} résultat{visibleTransactions.length === 1 ? "" : "s"}</p></div>
+          <div className="transaction-filters">
+            <input aria-label="Rechercher une opération" placeholder="Rechercher…" value={search} onChange={(event) => setSearch(event.target.value)} />
+            <select aria-label="Filtrer par type" value={transactionType} onChange={(event) => setTransactionType(event.target.value)}>
+              <option value="ALL">Tous les types</option>
+              <option value="INCOME">Revenus</option>
+              <option value="EXPENSE">Dépenses</option>
+              <option value="TRANSFER_IN">Virements reçus</option>
+              <option value="TRANSFER_OUT">Virements envoyés</option>
+            </select>
+          </div>
+        </header>
+        <TransactionTable transactions={visibleTransactions} emptyMessage="Aucune opération ne correspond à vos filtres." />
       </section>
-    </section>
-  );
+      <p className="dashboard-disclaimer">Les mouvements et virements sont fictifs et n’affectent aucun compte bancaire réel.</p>
+      <AccountModals
+        modal={modal}
+        onClose={() => setModal(null)}
+        accounts={accounts}
+        operationCategories={operationCategories}
+        selectedAccountId={selectedAccountId}
+        onSelectedAccountChange={setSelectedAccountId}
+        operation={operation}
+        onOperationChange={(key, value) => setOperation((current) => ({ ...current, [key]: value }))}
+        onOperationTypeChange={(type) => setOperation((current) => ({ ...current, type, category: "" }))}
+        onSubmitOperation={submitOperation}
+        transfer={transfer}
+        onTransferChange={(key, value) => setTransfer((current) => {
+          if (key === "sourceAccountId" && value === current.destinationAccountId) {
+            return { ...current, sourceAccountId: value, destinationAccountId: String(accounts.find((account) => String(account.id) !== value)?.id ?? "") };
+          }
+          return { ...current, [key]: value };
+        })}
+        onSubmitTransfer={submitTransfer}
+        busy={busy}
+      />
+    </section>;
+  }
+
+  if (view === "budget") {
+    return <section className="account-budget">
+      {renderNotice()}
+      <div className="page-intro">
+        <div><p className="eyebrow">Pilotage personnel · données fictives</p><h1>Mon budget</h1><p>Suivez les revenus et dépenses transmis par vos opérations enregistrées.</p></div>
+        <label className="compact-field">Période
+          <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
+        </label>
+      </div>
+      <div className="budget-metrics">
+        <article className="metric-card"><span>Revenus du mois</span><strong>{currency.format(budget?.totalIncome ?? 0)}</strong><small>Calculé par le service budget</small></article>
+        <article className="metric-card"><span>Dépenses du mois</span><strong>{currency.format(budget?.totalExpenses ?? 0)}</strong><small>Calculé par le service budget</small></article>
+        <article className="metric-card"><span>Catégories suivies</span><strong>{budget?.categories?.length ?? 0}</strong><small>Limites et dépenses du mois</small></article>
+      </div>
+      <section className="budget-category-section">
+        <header className="dashboard-panel-heading"><div><p className="eyebrow">Par catégorie</p><h2>Limites et consommation</h2></div></header>
+        <p className="field-hint">Les limites sont des objectifs personnels : un dépassement est signalé, mais n’empêche pas d’enregistrer une dépense.</p>
+        {!budget ? <div className="card loading-card">Chargement du budget…</div> : budget.categories.length === 0
+          ? <div className="card table-empty">Aucune catégorie disponible pour cette période.</div>
+          : <div className="budget-category-grid">{budget.categories.map((category) => <BudgetCategoryCard
+            key={category.category}
+            category={category}
+            value={limits[category.category]}
+            onChange={(key, value) => setLimits((current) => ({ ...current, [key]: value }))}
+            onSave={saveBudgetLimit}
+            busy={busy}
+          />)}</div>}
+      </section>
+      <p className="dashboard-disclaimer">Les indicateurs sont calculés à partir des opérations fictives enregistrées.</p>
+    </section>;
+  }
+
+  return null;
 }

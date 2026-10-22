@@ -1,5 +1,6 @@
 package com.bna.digitalbanking.credit.application.service;
 
+import java.math.BigDecimal;
 import java.util.List;
 import com.bna.digitalbanking.credit.application.dto.ApplicationDecision;
 import com.bna.digitalbanking.credit.application.dto.ApplicationDecisionRequest;
@@ -25,6 +26,7 @@ import com.bna.digitalbanking.credit.scoring.service.CreditScoringService;
 import com.bna.digitalbanking.identity.UserEntity;
 import com.bna.digitalbanking.identity.UserRepository;
 import com.bna.digitalbanking.identity.UserRole;
+import com.bna.digitalbanking.notification.service.NotificationService;
 import com.bna.digitalbanking.simulation.CreditParameterService;
 import com.bna.digitalbanking.simulation.CreditRateConfig;
 import com.bna.digitalbanking.simulation.RachatExterneRequest;
@@ -51,6 +53,7 @@ public class CreditApplicationService {
     private final AiEvaluationRepository aiEvaluations;
     private final EvaluationComparisonRepository comparisons;
     private final CreditAiEvaluationService aiEvaluationService;
+    private final NotificationService notifications;
 
     public CreditApplicationService(
             CreditApplicationRepository applications,
@@ -63,7 +66,8 @@ public class CreditApplicationService {
             CreditScoringService scoring,
             AiEvaluationRepository aiEvaluations,
             EvaluationComparisonRepository comparisons,
-            CreditAiEvaluationService aiEvaluationService) {
+            CreditAiEvaluationService aiEvaluationService,
+            NotificationService notifications) {
         this.applications = applications;
         this.events = events;
         this.users = users;
@@ -75,13 +79,14 @@ public class CreditApplicationService {
         this.aiEvaluations = aiEvaluations;
         this.comparisons = comparisons;
         this.aiEvaluationService = aiEvaluationService;
+        this.notifications = notifications;
     }
 
     private SimulationResult simulate(ApplicationRequest request) {
         return switch (request.scenario()) {
             case SANS_RACHAT -> simulations.simulateSansRachat(new SansRachatRequest(
                 request.averageMonthlySalary(),
-                request.halfRentIncome(),
+                request.halfRentIncome().multiply(BigDecimal.valueOf(2)),
                 request.sedDeductions(),
                 request.bnaDeductions(),
                 request.creditType(),
@@ -89,7 +94,7 @@ public class CreditApplicationService {
                 request.requestedAmount()));
             case RACHAT_INTERNE -> simulations.simulateRachatInterne(new RachatInterneRequest(
                 request.averageMonthlySalary(),
-                request.halfRentIncome(),
+                request.halfRentIncome().multiply(BigDecimal.valueOf(2)),
                 request.sedDeductions(),
                 request.bnaNonBuyoutDeductions(),
                 request.remainingBuyoutCapital(),
@@ -98,7 +103,7 @@ public class CreditApplicationService {
                 request.requestedAmount()));
             case RACHAT_EXTERNE -> simulations.simulateRachatExterne(new RachatExterneRequest(
                 request.averageMonthlySalary(),
-                request.halfRentIncome(),
+                request.halfRentIncome().multiply(BigDecimal.valueOf(2)),
                 request.sedDeductions(),
                 request.remainingBuyoutCapital(),
                 request.creditType(),
@@ -169,7 +174,6 @@ public class CreditApplicationService {
         CreditScoringEvidenceService.Evidence evidence = scoringEvidence.detect(application.getCustomer());
         application.updateScoringEvidence(
             evidence.incomeStabilityMonths(),
-            evidence.latePaymentsLast12Months(),
             evidence.savingsRegularityMonthsLast12Months());
         scoringEvaluations.save(scoring.evaluate(application, application.getSimulationSnapshot()));
         application.transition(ApplicationStatus.SUBMITTED);
@@ -275,7 +279,10 @@ public class CreditApplicationService {
             ApplicationStatus previous,
             ApplicationStatus next,
             String note) {
-        events.save(new ApplicationEvent(application, email, role, previous, next, note));
+        ApplicationEvent event = events.save(new ApplicationEvent(application, email, role, previous, next, note));
+        if (previous != next) {
+            notifications.createForApplicationEvent(event);
+        }
     }
 
     private ApplicationResponse response(CreditApplication application) {
@@ -298,7 +305,6 @@ public class CreditApplicationService {
             application.getBnaNonBuyoutDeductions(), application.getRemainingBuyoutCapital(),
             application.getStatus(), application.getCreatedAt(), application.getUpdatedAt(),
             application.getSubmittedAt(), application.getIncomeStabilityMonths(),
-            application.getLatePaymentsLast12Months(),
             application.getSavingsRegularityMonthsLast12Months(),
             history.stream().map(ApplicationEventResponse::from).toList(),
             com.bna.digitalbanking.credit.application.dto.SimulationSnapshotResponse

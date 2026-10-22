@@ -14,7 +14,7 @@ public class CreditAiProperties {
     private boolean enabled;
 
     @NotBlank
-    private String baseUrl = "https://api.openai.com/v1";
+    private String baseUrl = "https://generativelanguage.googleapis.com/v1beta";
 
     private String apiKey = "";
     private String model = "";

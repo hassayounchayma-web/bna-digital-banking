@@ -139,7 +139,7 @@ class IdentityControllerIntegrationTest {
         String simulation = """
             {
               "salaireMensuelMoyen": 2000,
-              "cinquantePourcentLoyers": 0,
+              "loyerMensuel": 0,
               "retenuesSed": 100,
               "retenuesCreditsBna": 100,
               "typeCredit": "Crédit Direct Dépenses Courantes",

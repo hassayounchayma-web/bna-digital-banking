@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
@@ -14,6 +15,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class CreditParameterService implements CreditRateProvider {
     private static final BigDecimal MAX_PERCENT = new BigDecimal("100");
     private static final BigDecimal HUNDRED = new BigDecimal("100");
+    private static final Set<String> EXTERNAL_BUYOUT_PRODUCTS = Set.of(
+        "Crédit Direct Dépenses Courantes",
+        "Crédit Direct Aménagement");
 
     private final TmmRepository tmmRepository;
     private final CreditMarginRepository marginRepository;
@@ -34,6 +38,11 @@ public class CreditParameterService implements CreditRateProvider {
 
     @Override
     public CreditRateConfig getRateConfig(CreditScenario scenario, String creditType) {
+        if (!isAllowedProduct(scenario, creditType)) {
+            throw new SimulationConfigException(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                "Produit non autorisé pour ce scénario");
+        }
         CreditMarginEntity margin = marginRepository.findByScenarioAndCreditType(scenario, creditType)
             .orElseThrow(() -> new SimulationConfigException(
                 HttpStatus.UNPROCESSABLE_ENTITY,
@@ -46,6 +55,7 @@ public class CreditParameterService implements CreditRateProvider {
     @Transactional(readOnly = true)
     public Map<String, CreditRateConfig> getCatalogue(CreditScenario scenario) {
         return marginRepository.findByScenarioOrderByCreditTypeAsc(scenario).stream()
+            .filter(margin -> isAllowedProduct(scenario, margin.getCreditType()))
             .collect(Collectors.toMap(
                 CreditMarginEntity::getCreditType,
                 margin -> new CreditRateConfig(
@@ -53,6 +63,11 @@ public class CreditParameterService implements CreditRateProvider {
                     margin.getMarginPercent().divide(HUNDRED, 12, RoundingMode.HALF_UP)),
                 (first, duplicate) -> first,
                 java.util.LinkedHashMap::new));
+    }
+
+    private static boolean isAllowedProduct(CreditScenario scenario, String creditType) {
+        return scenario != CreditScenario.RACHAT_EXTERNE
+            || EXTERNAL_BUYOUT_PRODUCTS.contains(creditType);
     }
 
     @Transactional(readOnly = true)

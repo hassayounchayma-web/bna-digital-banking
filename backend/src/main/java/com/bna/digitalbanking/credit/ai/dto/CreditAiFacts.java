@@ -12,7 +12,6 @@ public record CreditAiFacts(
     BigDecimal requestedMonthlyPayment,
     BigDecimal remainingBuyoutCapital,
     Integer incomeStabilityMonthsObserved,
-    Integer latePaymentsLast12MonthsSimulated,
     Integer savingsRegularityMonthsLast12MonthsObserved
 ) {
 }

@@ -10,12 +10,15 @@ import com.bna.digitalbanking.credit.application.entity.CreditSimulationSnapshot
 import com.bna.digitalbanking.credit.application.repository.CreditApplicationRepository;
 import com.bna.digitalbanking.credit.ai.service.CreditAiEvaluationPersistenceService.AiComparisonResult;
 import com.bna.digitalbanking.credit.ai.service.CreditAiEvaluationPersistenceService.AiEvaluationStatusResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class CreditAiEvaluationService {
+    private static final Logger LOGGER = LoggerFactory.getLogger(CreditAiEvaluationService.class);
     private static final String NOT_CONFIGURED =
         "L’analyse IA n’est pas configurée. Définissez LLM_ENABLED, LLM_MODEL et LLM_API_KEY dans l’environnement du backend.";
     private static final String UNAVAILABLE =
@@ -58,7 +61,8 @@ public class CreditAiEvaluationService {
                     parsed.warnings(),
                     null);
             } catch (CreditAiProviderException exception) {
-                result = unavailable(UNAVAILABLE);
+                LOGGER.warn("IA indisponible pour la demande {} : {}", applicationId, exception.getMessage());
+                result = unavailable(UNAVAILABLE + " Diagnostic fournisseur : " + exception.getMessage());
             } catch (IllegalArgumentException exception) {
                 result = new AiEvaluationStatusResult(
                     AiEvaluationStatus.INVALID_RESPONSE,
@@ -87,7 +91,6 @@ public class CreditAiEvaluationService {
             snapshot.getMonthlyPayment(),
             application.getRemainingBuyoutCapital(),
             application.getIncomeStabilityMonths(),
-            application.getLatePaymentsLast12Months(),
             application.getSavingsRegularityMonthsLast12Months());
     }
 

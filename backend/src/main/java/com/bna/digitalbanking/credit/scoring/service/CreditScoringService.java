@@ -15,11 +15,10 @@ import org.springframework.stereotype.Service;
 public class CreditScoringService {
     private static final BigDecimal HUNDRED = new BigDecimal("100");
     private static final BigDecimal ZERO = BigDecimal.ZERO;
-    private static final BigDecimal DEBT_WEIGHT = new BigDecimal("30");
-    private static final BigDecimal AVAILABLE_INCOME_WEIGHT = new BigDecimal("25");
-    private static final BigDecimal INCOME_STABILITY_WEIGHT = new BigDecimal("20");
-    private static final BigDecimal REPAYMENT_HISTORY_WEIGHT = new BigDecimal("15");
-    private static final BigDecimal SAVINGS_REGULARITY_WEIGHT = new BigDecimal("10");
+    private static final BigDecimal DEBT_WEIGHT = new BigDecimal("25");
+    private static final BigDecimal AVAILABLE_INCOME_WEIGHT = new BigDecimal("20");
+    private static final BigDecimal INCOME_STABILITY_WEIGHT = new BigDecimal("34");
+    private static final BigDecimal SAVINGS_REGULARITY_WEIGHT = new BigDecimal("21");
 
     private final CreditScoringProperties properties;
 
@@ -34,7 +33,6 @@ public class CreditScoringService {
         factors.add(debtFactor(simulation));
         factors.add(availableIncomeFactor(simulation));
         factors.add(incomeStabilityFactor(application.getIncomeStabilityMonths()));
-        factors.add(repaymentFactor(application.getLatePaymentsLast12Months()));
         factors.add(savingsFactor(application.getSavingsRegularityMonthsLast12Months()));
 
         BigDecimal availableWeight = factors.stream()
@@ -114,28 +112,6 @@ public class CreditScoringService {
             months + " mois consécutifs observés",
             "Calculé à partir des opérations de revenus SALARY enregistrées, plafonné à "
                 + fullScoreMonths + " mois selon le barème de démonstration.");
-    }
-
-    private ScoringFactor repaymentFactor(Integer latePayments) {
-        if (latePayments == null) {
-            return missing("REPAYMENT_HISTORY", "Historique de remboursement", REPAYMENT_HISTORY_WEIGHT,
-                "L’historique fictif de remboursement n’est pas disponible.");
-        }
-        BigDecimal penalty = properties.getLatePaymentPenaltyPoints() == null
-            ? ZERO
-            : properties.getLatePaymentPenaltyPoints().max(ZERO);
-        BigDecimal points = REPAYMENT_HISTORY_WEIGHT
-            .subtract(penalty.multiply(BigDecimal.valueOf(latePayments)))
-            .max(ZERO);
-        return assessed(
-            "REPAYMENT_HISTORY",
-            "Historique de remboursement",
-            REPAYMENT_HISTORY_WEIGHT,
-            points,
-            latePayments + " retard(s) simulé(s) sur 12 mois",
-            "Historique synthétique de démonstration, non issu d’un crédit ou d’un paiement réel. Le barème retire "
-                + penalty.stripTrailingZeros().toPlainString()
-                + " point(s) par retard simulé, sans descendre sous zéro.");
     }
 
     private ScoringFactor savingsFactor(Integer regularMonths) {

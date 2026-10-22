@@ -4,7 +4,6 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.SplittableRandom;
 import com.bna.digitalbanking.account.entity.AccountTransactionType;
 import com.bna.digitalbanking.account.entity.AccountType;
 import com.bna.digitalbanking.account.entity.TransactionCategory;
@@ -16,7 +15,6 @@ import org.springframework.stereotype.Service;
 public class CreditScoringEvidenceService {
     private static final int STABILITY_LOOKBACK_MONTHS = 24;
     private static final int SAVINGS_LOOKBACK_MONTHS = 12;
-    private static final long DEMO_REPAYMENT_SEED = 0x424E4144454D4FL;
 
     private final AccountTransactionRepository transactions;
 
@@ -52,7 +50,7 @@ public class CreditScoringEvidenceService {
             ? null
             : savingsMonths.size();
 
-        return new Evidence(stabilityMonths, generateDemoLatePayments(customer.getId()), regularSavingsMonths);
+        return new Evidence(stabilityMonths, regularSavingsMonths);
     }
 
     private int consecutiveSalaryMonths(Set<YearMonth> salaryMonths, YearMonth currentMonth, int maximumMonths) {
@@ -66,20 +64,8 @@ public class CreditScoringEvidenceService {
         return consecutiveMonths;
     }
 
-    private int generateDemoLatePayments(Long customerId) {
-        SplittableRandom random = new SplittableRandom(customerId ^ DEMO_REPAYMENT_SEED);
-        int latePayments = 0;
-        for (int month = 0; month < SAVINGS_LOOKBACK_MONTHS; month++) {
-            if (random.nextInt(5) == 0) {
-                latePayments++;
-            }
-        }
-        return latePayments;
-    }
-
     public record Evidence(
         Integer incomeStabilityMonths,
-        Integer latePaymentsLast12Months,
         Integer savingsRegularityMonthsLast12Months
     ) {
     }

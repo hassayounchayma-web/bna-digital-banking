@@ -21,6 +21,9 @@ public class SimulationService {
     }
 
     public SimulationResult simulateSansRachat(SansRachatRequest request) {
+        if (request.dureeMois() <= 0) {
+            return SimulationResult.invalidParameters("La durée doit être strictement positive");
+        }
         CreditRateConfig config = parameterService.getRateConfig(
             CreditScenario.SANS_RACHAT, request.typeCredit());
         if (request.dureeMois() > config.maxMonths()) {
@@ -28,32 +31,48 @@ public class SimulationService {
                 "Durée max autorisée : " + config.maxMonths() + " mois");
         }
 
-        BigDecimal income = request.salaireMensuelMoyen().add(request.cinquantePourcentLoyers());
+        BigDecimal income = netIncome(request.salaireMensuelMoyen(), request.loyerMensuel());
         BigDecimal debtRate = standardDebtRate(income);
         BigDecimal safeguard = standardSafeguard(request.salaireMensuelMoyen());
         BigDecimal ceiling = ceiling(request.salaireMensuelMoyen(), income, debtRate, safeguard);
-        BigDecimal available = nonNegative(ceiling.subtract(request.retenuesSed())
-            .subtract(request.retenuesCreditsBna()));
+        BigDecimal available = ceiling.subtract(request.retenuesSed())
+            .subtract(request.retenuesCreditsBna());
         BigDecimal annualRate = parameterService.getTmmAnnualRate().add(config.annualMarginPercent());
         BigDecimal maxCredit = presentValue(annualRate, request.dureeMois(), available);
 
         SimulationResult result = baseResult(
             income, debtRate, safeguard, ceiling, available, maxCredit, request.dureeMois(), annualRate);
-        BigDecimal requested = request.montantCreditDemande();
-        if (requested == null || requested.signum() == 0) {
-            return withStatusAndMonthly(result, "ELIGIBLE", available);
+        if (available.signum() <= 0) {
+            return SimulationResult.capacityInsufficient(result);
         }
-        if (requested.compareTo(maxCredit.add(new BigDecimal("0.01"))) > 0) {
-            return withError(result, available, "HORS_LIMITES",
+        BigDecimal requested = request.montantCreditDemande();
+        if (requested == null) {
+            return withStatusAndMonthly(result, "ELIGIBLE");
+        }
+        if (requested.signum() <= 0) {
+            return withError(result, "HORS_LIMITES", "Le montant demandé doit être strictement positif");
+        }
+        if (requested.compareTo(maxCredit) > 0) {
+            return withError(result, "HORS_LIMITES",
                 "Montant demandé dépasse le maximum (" + money(maxCredit) + " DT)");
         }
 
         BigDecimal monthly = payment(annualRate, request.dureeMois(), requested);
+        if (monthly.compareTo(available) > 0) {
+            return withError(result, "HORS_LIMITES",
+                "La mensualité demandée dépasse la capacité disponible");
+        }
         BigDecimal total = request.retenuesSed().add(request.retenuesCreditsBna()).add(monthly);
         return withRequestedCredit(result, monthly, total, income, null);
     }
 
     public SimulationResult simulateRachatInterne(RachatInterneRequest request) {
+        if (request.dureeMois() <= 0) {
+            return SimulationResult.invalidParameters("La durée doit être strictement positive");
+        }
+        if (request.capitalRestantARacheter().signum() <= 0) {
+            return SimulationResult.invalidParameters("Le capital restant dû doit être strictement positif");
+        }
         CreditRateConfig config = parameterService.getRateConfig(
             CreditScenario.RACHAT_INTERNE, request.typeCredit());
         if (request.dureeMois() > config.maxMonths()) {
@@ -61,30 +80,41 @@ public class SimulationService {
                 "Durée max autorisée : " + config.maxMonths() + " mois");
         }
 
-        BigDecimal income = request.salaireMensuelMoyen().add(request.cinquantePourcentLoyers());
+        BigDecimal income = netIncome(request.salaireMensuelMoyen(), request.loyerMensuel());
         BigDecimal debtRate = standardDebtRate(income);
         BigDecimal safeguard = standardSafeguard(request.salaireMensuelMoyen());
         BigDecimal ceiling = ceiling(request.salaireMensuelMoyen(), income, debtRate, safeguard);
-        BigDecimal available = nonNegative(ceiling.subtract(request.retenuesSed())
-            .subtract(request.retenuesCreditsBnaNonRachete()));
+        BigDecimal available = ceiling.subtract(request.retenuesSed())
+            .subtract(request.retenuesCreditsBnaNonRachete());
         BigDecimal annualRate = parameterService.getTmmAnnualRate().add(config.annualMarginPercent());
         BigDecimal maxCredit = presentValue(annualRate, request.dureeMois(), available);
         SimulationResult result = baseResult(
             income, debtRate, safeguard, ceiling, available, maxCredit, request.dureeMois(), annualRate);
 
-        if (maxCredit.compareTo(request.capitalRestantARacheter()) < 0) {
+        if (available.signum() <= 0 || maxCredit.compareTo(request.capitalRestantARacheter()) < 0) {
             return SimulationResult.capacityInsufficient(result);
         }
         BigDecimal requested = request.montantCreditDemande();
-        if (requested == null || requested.signum() == 0) {
-            return withStatusAndMonthly(result, "ELIGIBLE", available);
+        if (requested == null) {
+            return withStatusAndMonthly(result, "ELIGIBLE");
         }
-        if (requested.compareTo(maxCredit.add(new BigDecimal("0.01"))) > 0) {
-            return withError(result, available, "HORS_LIMITES",
+        if (requested.signum() <= 0) {
+            return withError(result, "HORS_LIMITES", "Le montant demandé doit être strictement positif");
+        }
+        if (requested.compareTo(request.capitalRestantARacheter()) < 0) {
+            return withError(result, "HORS_LIMITES",
+                "Le montant demandé doit être supérieur ou égal au capital restant dû");
+        }
+        if (requested.compareTo(maxCredit) > 0) {
+            return withError(result, "HORS_LIMITES",
                 "Montant demandé dépasse le maximum (" + money(maxCredit) + " DT)");
         }
 
         BigDecimal monthly = payment(annualRate, request.dureeMois(), requested);
+        if (monthly.compareTo(available) > 0) {
+            return withError(result, "HORS_LIMITES",
+                "La mensualité demandée dépasse la capacité disponible");
+        }
         BigDecimal total = request.retenuesSed()
             .add(request.retenuesCreditsBnaNonRachete()).add(monthly);
         BigDecimal remainingCredit = requested.subtract(request.capitalRestantARacheter());
@@ -92,6 +122,19 @@ public class SimulationService {
     }
 
     public SimulationResult simulateRachatExterne(RachatExterneRequest request) {
+        if (request.dureeMois() <= 0) {
+            return SimulationResult.invalidParameters("La durée doit être strictement positive");
+        }
+        if (request.capitalRestantARacheter().signum() <= 0) {
+            return SimulationResult.invalidParameters("Le capital restant dû doit être strictement positif");
+        }
+        BigDecimal income = netIncome(request.salaireMensuelMoyen(), request.loyerMensuel());
+        if (income.compareTo(new BigDecimal("1500")) < 0) {
+            return SimulationResult.nonEligible(income);
+        }
+        if (request.salaireMensuelMoyen().compareTo(new BigDecimal("1500")) < 0) {
+            return SimulationResult.ruleToClarify(income);
+        }
         CreditRateConfig config = parameterService.getRateConfig(
             CreditScenario.RACHAT_EXTERNE, request.typeCredit());
         if (request.dureeMois() > config.maxMonths()) {
@@ -99,29 +142,39 @@ public class SimulationService {
                 "Durée max autorisée : " + config.maxMonths() + " mois");
         }
 
-        BigDecimal income = request.salaireMensuelMoyen().add(request.cinquantePourcentLoyers());
         BigDecimal debtRate = externalDebtRate(income);
         BigDecimal safeguard = externalSafeguard(request.salaireMensuelMoyen());
         BigDecimal ceiling = ceiling(request.salaireMensuelMoyen(), income, debtRate, safeguard);
-        BigDecimal available = nonNegative(ceiling.subtract(request.retenuesSed()));
+        BigDecimal available = ceiling.subtract(request.retenuesSed());
         BigDecimal annualRate = parameterService.getTmmAnnualRate().add(config.annualMarginPercent());
         BigDecimal maxCredit = presentValue(annualRate, request.dureeMois(), available);
         SimulationResult result = baseResult(
             income, debtRate, safeguard, ceiling, available, maxCredit, request.dureeMois(), annualRate);
 
-        if (maxCredit.compareTo(request.capitalRestantARacheter()) < 0) {
+        if (available.signum() <= 0 || maxCredit.compareTo(request.capitalRestantARacheter()) < 0) {
             return SimulationResult.capacityInsufficient(result);
         }
         BigDecimal requested = request.montantCreditDemande();
-        if (requested == null || requested.signum() == 0) {
-            return withStatusAndMonthly(result, "ELIGIBLE", available);
+        if (requested == null) {
+            return withStatusAndMonthly(result, "ELIGIBLE");
         }
-        if (requested.compareTo(maxCredit.add(new BigDecimal("0.01"))) > 0) {
-            return withError(result, available, "HORS_LIMITES",
+        if (requested.signum() <= 0) {
+            return withError(result, "HORS_LIMITES", "Le montant demandé doit être strictement positif");
+        }
+        if (requested.compareTo(request.capitalRestantARacheter()) < 0) {
+            return withError(result, "HORS_LIMITES",
+                "Le montant demandé doit être supérieur ou égal au capital restant dû");
+        }
+        if (requested.compareTo(maxCredit) > 0) {
+            return withError(result, "HORS_LIMITES",
                 "Montant demandé dépasse le maximum (" + money(maxCredit) + " DT)");
         }
 
         BigDecimal monthly = payment(annualRate, request.dureeMois(), requested);
+        if (monthly.compareTo(available) > 0) {
+            return withError(result, "HORS_LIMITES",
+                "La mensualité demandée dépasse la capacité disponible");
+        }
         BigDecimal total = request.retenuesSed().add(monthly);
         BigDecimal remainingCredit = requested.subtract(request.capitalRestantARacheter());
         return withRequestedCredit(result, monthly, total, income, remainingCredit);
@@ -218,14 +271,18 @@ public class SimulationService {
             null);
     }
 
+    private static BigDecimal netIncome(BigDecimal salary, BigDecimal monthlyRent) {
+        return salary.add(monthlyRent.multiply(new BigDecimal("0.50"), CALCULATION_CONTEXT));
+    }
+
     private static SimulationResult withStatusAndMonthly(
-            SimulationResult result, String status, BigDecimal monthly) {
-        return copy(result, result.montantMaxCredit(), money(monthly), null, null, null, null, status, null);
+            SimulationResult result, String status) {
+        return copy(result, result.montantMaxCredit(), null, null, null, null, null, status, null);
     }
 
     private static SimulationResult withError(
-            SimulationResult result, BigDecimal monthlyCapacity, String status, String error) {
-        return copy(result, result.montantMaxCredit(), money(monthlyCapacity),
+            SimulationResult result, String status, String error) {
+        return copy(result, result.montantMaxCredit(), null,
             null, null, null, null, status, error);
     }
 
@@ -270,10 +327,6 @@ public class SimulationService {
             remainingCredit,
             status,
             error);
-    }
-
-    private static BigDecimal nonNegative(BigDecimal value) {
-        return value.max(ZERO);
     }
 
     private static BigDecimal money(BigDecimal value) {

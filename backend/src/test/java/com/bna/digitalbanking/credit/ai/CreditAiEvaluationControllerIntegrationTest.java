@@ -1,6 +1,8 @@
 package com.bna.digitalbanking.credit.ai;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -9,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.bna.digitalbanking.credit.ai.dto.CreditAiFacts;
+import com.bna.digitalbanking.credit.ai.service.CreditAiProviderException;
 import com.bna.digitalbanking.credit.ai.service.CreditAiProvider;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -125,7 +128,16 @@ class CreditAiEvaluationControllerIntegrationTest {
             .andExpect(jsonPath("$.comparison.riskAgreement").value(org.hamcrest.Matchers.nullValue()));
 
         when(provider.isConfigured()).thenReturn(true);
-        when(provider.analyze(any())).thenReturn("{not-json");
+        doThrow(new CreditAiProviderException("Le fournisseur IA a répondu avec le statut HTTP 401."))
+            .when(provider).analyze(any());
+        mockMvc.perform(post("/api/admin/applications/{id}/ai-evaluation", applicationId)
+                .header("Authorization", "Bearer " + adminToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.aiEvaluation.status").value("UNAVAILABLE"))
+            .andExpect(jsonPath("$.aiEvaluation.message")
+                .value(org.hamcrest.Matchers.containsString("HTTP 401")));
+
+        doReturn("{not-json").when(provider).analyze(any());
         mockMvc.perform(post("/api/admin/applications/{id}/ai-evaluation", applicationId)
                 .header("Authorization", "Bearer " + adminToken))
             .andExpect(status().isOk())
@@ -156,7 +168,6 @@ class CreditAiEvaluationControllerIntegrationTest {
                       "bnaNonBuyoutDeductions": 0,
                       "remainingBuyoutCapital": 0,
                       "incomeStabilityMonths": 12,
-                      "latePaymentsLast12Months": 1,
                       "savingsRegularityMonthsLast12Months": 6
                     }
                     """))

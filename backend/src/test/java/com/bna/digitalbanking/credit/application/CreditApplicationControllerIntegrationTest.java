@@ -10,6 +10,7 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.bna.digitalbanking.credit.scoring.service.CreditScoringRefreshRunner;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -38,6 +39,9 @@ class CreditApplicationControllerIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private CreditScoringRefreshRunner scoringRefreshRunner;
 
     @Test
     void clientAndAdminCanCompleteAuditedHumanReviewWorkflow() throws Exception {
@@ -73,7 +77,7 @@ class CreditApplicationControllerIntegrationTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("SUBMITTED"))
             .andExpect(jsonPath("$.scoring.provisional").value(true))
-            .andExpect(jsonPath("$.scoring.factors.length()").value(5))
+            .andExpect(jsonPath("$.scoring.factors.length()").value(4))
             .andExpect(jsonPath("$.scoring.missingInformation.length()").value(2))
             .andExpect(jsonPath("$.scoring.factors[2].points").doesNotExist())
             .andExpect(jsonPath("$.scoring.disclaimer").isNotEmpty());
@@ -140,7 +144,7 @@ class CreditApplicationControllerIntegrationTest {
     }
 
     @Test
-    void ignoresClientSuppliedRiskFactorsWhenNoTransactionEvidenceExists() throws Exception {
+    void excludesUnverifiedRepaymentHistoryFromScoring() throws Exception {
         String token = registerAndGetToken("scoring-" + System.nanoTime() + "@example.test");
         String payload = """
             {
@@ -155,7 +159,7 @@ class CreditApplicationControllerIntegrationTest {
               "bnaNonBuyoutDeductions": 0,
               "remainingBuyoutCapital": 0,
               "incomeStabilityMonths": 12,
-              "latePaymentsLast12Months": 1,
+              "latePaymentsLast12Months": 120,
               "savingsRegularityMonthsLast12Months": 6
             }
             """;
@@ -173,34 +177,62 @@ class CreditApplicationControllerIntegrationTest {
             .andExpect(jsonPath("$.scoring.provisional").value(true))
             .andExpect(jsonPath("$.scoring.scoreOutOf100").isNumber())
             .andExpect(jsonPath("$.scoring.factors[0].code").value("DEBT"))
-            .andExpect(jsonPath("$.scoring.factors[0].maximumPoints").value(30))
-            .andExpect(jsonPath("$.scoring.factors[1].maximumPoints").value(25))
-            .andExpect(jsonPath("$.scoring.factors[2].maximumPoints").value(20))
+            .andExpect(jsonPath("$.scoring.factors[0].maximumPoints").value(25))
+            .andExpect(jsonPath("$.scoring.factors[1].maximumPoints").value(20))
+            .andExpect(jsonPath("$.scoring.factors[2].maximumPoints").value(34))
             .andExpect(jsonPath("$.scoring.factors[2].points").doesNotExist())
-            .andExpect(jsonPath("$.scoring.factors[3].inputValue").value(org.hamcrest.Matchers.containsString("simulé(s)")))
-            .andExpect(jsonPath("$.scoring.factors[3].explanation").value(org.hamcrest.Matchers.containsString("synthétique")))
-            .andExpect(jsonPath("$.scoring.factors[4].points").doesNotExist())
+            .andExpect(jsonPath("$.scoring.factors[3].code").value("SAVINGS_REGULARITY"))
+            .andExpect(jsonPath("$.scoring.factors[3].maximumPoints").value(21))
+            .andExpect(jsonPath("$.scoring.factors[3].points").doesNotExist())
+            .andExpect(jsonPath("$.latePaymentsLast12Months").doesNotExist())
             .andExpect(jsonPath("$.scoring.missingInformation.length()").value(2))
             .andReturn();
         JsonNode scoreResult = objectMapper.readTree(submitted.getResponse().getContentAsString())
             .get("scoring");
         BigDecimal awardedPoints = BigDecimal.ZERO;
         BigDecimal maximumPoints = BigDecimal.ZERO;
+        BigDecimal totalMaximumPoints = BigDecimal.ZERO;
         for (JsonNode factor : scoreResult.get("factors")) {
+            totalMaximumPoints = totalMaximumPoints.add(factor.get("maximumPoints").decimalValue());
             if (factor.get("points").isNumber()) {
                 awardedPoints = awardedPoints.add(factor.get("points").decimalValue());
                 maximumPoints = maximumPoints.add(factor.get("maximumPoints").decimalValue());
             }
         }
+        org.junit.jupiter.api.Assertions.assertEquals(0, new BigDecimal("100").compareTo(totalMaximumPoints));
         BigDecimal expectedScore = awardedPoints.multiply(new BigDecimal("100"))
             .divide(maximumPoints, 2, java.math.RoundingMode.HALF_UP);
         org.junit.jupiter.api.Assertions.assertEquals(
             0, expectedScore.compareTo(scoreResult.get("scoreOutOf100").decimalValue()));
 
+        jdbcTemplate.update(
+            "UPDATE credit_scoring_evaluations SET score_out_of_100 = 42 WHERE application_id = ?",
+            Long.parseLong(id));
+        jdbcTemplate.update("""
+            UPDATE credit_scoring_factors
+            SET factor_max_points = CASE factor_order
+                WHEN 0 THEN 30
+                WHEN 1 THEN 25
+                WHEN 2 THEN 20
+                WHEN 3 THEN 10
+                ELSE factor_max_points
+            END
+            WHERE evaluation_id = (
+                SELECT id FROM credit_scoring_evaluations WHERE application_id = ?
+            )
+            """, Long.parseLong(id));
+        org.junit.jupiter.api.Assertions.assertTrue(scoringRefreshRunner.refreshExistingEvaluations() >= 1);
+
         mockMvc.perform(get("/api/applications/{id}", id)
                 .header("Authorization", "Bearer " + token))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.scoring.provisional").value(true))
+            .andExpect(jsonPath("$.scoring.scoreOutOf100").value(expectedScore.doubleValue()))
+            .andExpect(jsonPath("$.scoring.factors.length()").value(4))
+            .andExpect(jsonPath("$.scoring.factors[0].maximumPoints").value(25))
+            .andExpect(jsonPath("$.scoring.factors[1].maximumPoints").value(20))
+            .andExpect(jsonPath("$.scoring.factors[2].maximumPoints").value(34))
+            .andExpect(jsonPath("$.scoring.factors[3].maximumPoints").value(21))
             .andExpect(jsonPath("$.incomeStabilityMonths").value(org.hamcrest.Matchers.nullValue()));
     }
 
@@ -259,7 +291,6 @@ class CreditApplicationControllerIntegrationTest {
                       "bnaNonBuyoutDeductions":0,
                       "remainingBuyoutCapital":0,
                       "incomeStabilityMonths":0,
-                      "latePaymentsLast12Months":120,
                       "savingsRegularityMonthsLast12Months":0
                     }
                     """))
@@ -273,7 +304,7 @@ class CreditApplicationControllerIntegrationTest {
             .andExpect(jsonPath("$.savingsRegularityMonthsLast12Months").value(3))
             .andExpect(jsonPath("$.scoring.provisional").value(false))
             .andExpect(jsonPath("$.scoring.factors[2].inputValue").value("3 mois consécutifs observés"))
-            .andExpect(jsonPath("$.scoring.factors[4].inputValue").value("3 mois avec virement observé sur 12"));
+            .andExpect(jsonPath("$.scoring.factors[3].inputValue").value("3 mois avec virement observé sur 12"));
     }
 
     @Test

@@ -1,0 +1,13 @@
+{
+  "name": "bna-digital-banking",
+  "private": true,
+  "scripts": {
+    "dev:backend": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-backend.ps1",
+    "dev:client": "npm --prefix .\\frontend-client run dev -- --host 127.0.0.1",
+    "build": "npm run build:backend && npm run build:client",
+    "build:backend": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-backend.ps1 -Build",
+    "test:backend": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-backend.ps1 -Tests",
+    "build:client": "npm --prefix .\\frontend-client run build",
+    "lint:client": "npm --prefix .\\frontend-client run lint"
+  }
+}
